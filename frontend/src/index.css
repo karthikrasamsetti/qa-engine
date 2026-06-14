@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Instrument-panel palette: muted slate, not pure black */
+  --bg: #0e1116;
+  --panel: #151a21;
+  --panel-2: #1b212b;
+  --border: #262e3a;
+  --text: #d4dae3;
+  --text-dim: #788396;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+.mono {
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code",
+    Menlo, Consolas, monospace;
+}
+
+.console::-webkit-scrollbar { width: 8px; }
+.console::-webkit-scrollbar-track { background: transparent; }
+.console::-webkit-scrollbar-thumb { background: #2c3542; border-radius: 4px; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.event-row { animation: fadeUp 0.18s ease-out; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse { animation: pulse 1.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .event-row, .pulse { animation: none; }
+}
