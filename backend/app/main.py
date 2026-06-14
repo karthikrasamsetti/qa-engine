@@ -3,9 +3,7 @@
 Exposes:
   POST /runs                  -> start a graph run in the background, return run_id
   GET  /runs/{run_id}/stream  -> SSE stream of trajectory events
-  POST /runs/{run_id}/resume  -> (Stage B) resume a HITL-paused run
-
-The SSE endpoint disables proxy buffering so events arrive live.
+  POST /runs/{run_id}/resume  -> resume a HITL-paused run with human clarification
 """
 
 from __future__ import annotations
@@ -16,6 +14,7 @@ import uuid
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langgraph.types import Command
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -26,7 +25,6 @@ logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Intelligent QA Engine")
 
-# Dev CORS: lock down before deployment.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,8 +42,16 @@ class RunResponse(BaseModel):
     run_id: str
 
 
+class ResumeRequest(BaseModel):
+    response: str
+
+
 async def _execute_run(run_id: str, raw_input: str, target_url: str) -> None:
-    """Drive the graph and ensure the stream is closed when done."""
+    """Drive the graph and manage the event stream lifecycle.
+
+    If the graph is interrupted for HITL the stream stays open — the resume
+    endpoint will continue emitting events and close the stream when done.
+    """
     config = {"configurable": {"thread_id": run_id}}
     initial: dict = {
         "run_id": run_id,
@@ -54,18 +60,48 @@ async def _execute_run(run_id: str, raw_input: str, target_url: str) -> None:
         "status": "running",
     }
     try:
-        await graph.ainvoke(initial, config=config)
-    except Exception as exc:  # noqa: BLE001 - surface any failure to the stream
+        result = await graph.ainvoke(initial, config=config)
+    except Exception as exc:
         logging.exception("run %s failed", run_id)
         await emitter.emit(run_id, "System", 0, "error", f"Run failed: {exc}")
-    finally:
         await emitter.close(run_id)
+        return
+
+    # LangGraph puts __interrupt__ in the result when a node called interrupt().
+    # Leave the stream open — the resume endpoint will close it when the run ends.
+    if isinstance(result, dict) and "__interrupt__" in result:
+        return
+
+    await emitter.close(run_id)
+
+
+async def _execute_resume(run_id: str, hitl_response: str) -> None:
+    """Resume a HITL-paused graph run with the human's clarification."""
+    config = {"configurable": {"thread_id": run_id}}
+    try:
+        result = await graph.ainvoke(Command(resume=hitl_response), config=config)
+    except Exception as exc:
+        logging.exception("resume %s failed", run_id)
+        await emitter.emit(run_id, "System", 0, "error", f"Resume failed: {exc}")
+        await emitter.close(run_id)
+        return
+
+    if isinstance(result, dict) and "__interrupt__" in result:
+        return  # another interrupt — stream stays open
+
+    await emitter.close(run_id)
 
 
 @app.post("/runs", response_model=RunResponse)
 async def start_run(req: RunRequest) -> RunResponse:
     run_id = uuid.uuid4().hex
     asyncio.create_task(_execute_run(run_id, req.raw_input, req.target_url))
+    return RunResponse(run_id=run_id)
+
+
+@app.post("/runs/{run_id}/resume", response_model=RunResponse)
+async def resume_run(run_id: str, req: ResumeRequest) -> RunResponse:
+    asyncio.create_task(_execute_resume(run_id, req.response))
     return RunResponse(run_id=run_id)
 
 
