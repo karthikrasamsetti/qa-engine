@@ -4,6 +4,7 @@ sse-starlette>=2.1
 langgraph>=0.2.50
 langchain-anthropic>=0.3
 anthropic>=0.40
+openai>=1.0
 pydantic>=2.9
 pydantic-settings>=2.6
 # dev / test

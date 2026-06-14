@@ -117,6 +117,16 @@ async def stream_run(run_id: str) -> EventSourceResponse:
     )
 
 
+@app.get("/runs/{run_id}/cost")
+async def get_run_cost(run_id: str) -> dict:
+    from app.llm.cost_store import cost_store
+    return {
+        "run_id": run_id,
+        "total_cost_usd": cost_store.get(run_id),
+        "llm_calls": cost_store.calls(run_id),
+    }
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}

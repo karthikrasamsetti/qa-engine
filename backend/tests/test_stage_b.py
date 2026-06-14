@@ -35,18 +35,34 @@ _PASS_VERDICT = (
 
 def _fail_llm(monkeypatch) -> None:
     from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
 
-    async def _mock(tier, system, user, max_tokens=2048):
-        return _FAIL_VERDICT
+    async def _mock(
+        messages, model_tier, *,
+        response_format=None, tools=None, max_tokens=2048, run_id=None,
+    ):
+        return LLMResponse(
+            text=_FAIL_VERDICT,
+            input_tokens=100, output_tokens=50,
+            model="mock-model", cost_usd=0.0,
+        )
 
     monkeypatch.setattr(llm_mod.llm_client, "complete", _mock)
 
 
 def _pass_llm(monkeypatch) -> None:
     from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
 
-    async def _mock(tier, system, user, max_tokens=2048):
-        return _PASS_VERDICT
+    async def _mock(
+        messages, model_tier, *,
+        response_format=None, tools=None, max_tokens=2048, run_id=None,
+    ):
+        return LLMResponse(
+            text=_PASS_VERDICT,
+            input_tokens=100, output_tokens=50,
+            model="mock-model", cost_usd=0.0,
+        )
 
     monkeypatch.setattr(llm_mod.llm_client, "complete", _mock)
 

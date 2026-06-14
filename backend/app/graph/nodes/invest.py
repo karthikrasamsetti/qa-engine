@@ -44,15 +44,18 @@ async def invest_node(state: QAState) -> dict:
     await emitter.emit(run_id, agent, 1, "thought",
                        "Evaluating story against INVEST principles…")
 
-    raw_resp = await llm_client.complete(
-        "reasoning",
-        system=INVEST_SYSTEM,
-        user=build_invest_user(story),
+    resp = await llm_client.complete(
+        messages=[
+            {"role": "system", "content": INVEST_SYSTEM},
+            {"role": "user",   "content": build_invest_user(story)},
+        ],
+        model_tier="reasoning",
         max_tokens=1024,
+        run_id=run_id,
     )
 
     try:
-        verdict = _parse_verdict(raw_resp)
+        verdict = _parse_verdict(resp.text)
     except (ValueError, json.JSONDecodeError) as exc:
         logger.error("INVEST: failed to parse LLM response — %s", exc)
         verdict = {
