@@ -5,10 +5,17 @@ Exposes:
   GET  /runs/{run_id}/stream  -> SSE stream of trajectory events
   POST /runs/{run_id}/resume  -> resume a HITL-paused run with human clarification
 """
-
 from __future__ import annotations
 
+import sys
 import asyncio
+
+# Playwright spawns subprocesses; the default SelectorEventLoop on Windows
+# cannot do that.  Switch to ProactorEventLoop before anything else touches
+# asyncio so uvicorn inherits the correct policy.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import logging
 import uuid
 

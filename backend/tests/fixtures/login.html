@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login</title>
+  <style>
+    body { font-family: sans-serif; max-width: 400px; margin: 80px auto; }
+    label { display: block; margin-top: 16px; }
+    input { display: block; width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+    button { display: block; width: 100%; padding: 10px; margin-top: 20px; }
+    .links { margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Sign In</h1>
+  <form id="login-form" action="#" method="post">
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" placeholder="Email address" required>
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" placeholder="Password" required>
+
+    <button id="submit" type="submit">Sign in</button>
+
+    <div class="links">
+      <a id="forgot-password" href="#">Forgot password?</a>
+    </div>
+  </form>
+</body>
+</html>
