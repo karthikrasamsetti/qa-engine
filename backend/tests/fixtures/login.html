@@ -1,31 +1,73 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login — QA Engine Fixture</title>
   <style>
-    body { font-family: sans-serif; max-width: 400px; margin: 80px auto; }
-    label { display: block; margin-top: 16px; }
-    input { display: block; width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
-    button { display: block; width: 100%; padding: 10px; margin-top: 20px; }
-    .links { margin-top: 12px; }
+    body { font-family: system-ui, sans-serif; max-width: 360px; margin: 60px auto; padding: 0 16px; }
+    h1 { font-size: 20px; }
+    label { display: block; margin: 12px 0 4px; font-size: 14px; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { margin-top: 16px; padding: 10px 16px; cursor: pointer; }
+    .error { color: #b00020; font-size: 14px; margin-top: 12px; }
+    .hidden { display: none; }
+    #dashboard { padding: 16px; border: 1px solid #ccc; border-radius: 8px; }
   </style>
 </head>
 <body>
-  <h1>Sign In</h1>
-  <form id="login-form" action="#" method="post">
-    <label for="email">Email address</label>
-    <input id="email" name="email" type="email" placeholder="Email address" required>
+  <!-- Login view -->
+  <div id="login-view">
+    <h1 id="login-title">Sign in</h1>
+    <form id="login-form" onsubmit="return false;">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required />
 
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" placeholder="Password" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required />
 
-    <button id="submit" type="submit">Sign in</button>
-
-    <div class="links">
+      <button type="submit" id="submit">Sign in</button>
       <a id="forgot-password" href="#">Forgot password?</a>
-    </div>
-  </form>
+    </form>
+    <div id="login-error" class="error hidden">Invalid email or password.</div>
+  </div>
+
+  <!-- Post-login dashboard view (hidden until valid login) -->
+  <div id="dashboard" >
+    <h1 id="welcome">Welcome, User!</h1>
+    <p id="account-details">Account: user@example.com</p>
+    <button id="logout">Log out</button>
+  </div>
+
+  <script>
+    // Valid credentials for the fixture's happy path.
+    const VALID_EMAIL = "user@example.com";
+    const VALID_PASSWORD = "SecurePassword123";
+
+    const form = document.getElementById("login-form");
+    const errorEl = document.getElementById("login-error");
+    const loginView = document.getElementById("login-view");
+    const dashboard = document.getElementById("dashboard");
+
+    document.getElementById("submit").addEventListener("click", function () {
+      const email = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+
+      if (email === VALID_EMAIL && password === VALID_PASSWORD) {
+        errorEl.classList.add("hidden");
+        loginView.classList.add("hidden");
+        dashboard.classList.remove("hidden");
+      } else {
+        errorEl.classList.remove("hidden");
+      }
+    });
+
+    document.getElementById("logout").addEventListener("click", function () {
+      dashboard.classList.add("hidden");
+      loginView.classList.remove("hidden");
+      document.getElementById("email").value = "";
+      document.getElementById("password").value = "";
+    });
+  </script>
 </body>
 </html>
