@@ -120,7 +120,7 @@ def _make_sequential_mock(*texts: str):
 
 
 def _make_scaffolder_or_critic_mock(script_text: str, critic_text: str):
-    """Route by user-message prefix: scaffolder user starts with 'TEST PLAN:'."""
+    """Route by user-message content: scaffolder user contains 'TEST PLAN:'."""
     from app.llm.client import LLMResponse
 
     async def _mock(
@@ -128,7 +128,7 @@ def _make_scaffolder_or_critic_mock(script_text: str, critic_text: str):
         response_format=None, tools=None, max_tokens=2048, run_id=None,
     ):
         user = next((m["content"] for m in messages if m["role"] == "user"), "")
-        text = script_text if user.startswith("TEST PLAN:") else critic_text
+        text = script_text if "TEST PLAN:" in user else critic_text
         return LLMResponse(
             text=text, input_tokens=100, output_tokens=200,
             model="mock-reasoning", cost_usd=0.0,
@@ -330,3 +330,68 @@ async def test_reflection_cap_proceeds_unapproved(monkeypatch):
     assert route_after_critic(state) == "execution"
 
     await emitter.close(run_id)
+
+
+# ---------------------------------------------------------------------------
+# 6. target_url is passed into the LLM prompt
+# ---------------------------------------------------------------------------
+
+async def test_scaffolder_prompt_includes_target_url(monkeypatch):
+    """target_url from state must appear verbatim in the user message sent to the LLM.
+
+    Without this the model invents placeholder URLs (example.com, /dashboard).
+    """
+    from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
+
+    captured_messages: list = []
+
+    async def _capture(
+        messages, model_tier, *,
+        response_format=None, tools=None, max_tokens=2048, run_id=None,
+    ):
+        captured_messages.extend(messages)
+        return LLMResponse(
+            text=_MOCK_SCRIPT, input_tokens=100, output_tokens=200,
+            model="mock", cost_usd=0.0,
+        )
+
+    monkeypatch.setattr(llm_mod.llm_client, "complete", _capture)
+
+    target = "http://myapp.local:3000/login"
+    state: dict = {
+        "run_id": "se-url-in-prompt",
+        "test_plan": _TEST_PLAN,
+        "locators": _LOCATORS,
+        "target_url": target,
+        "status": "running",
+    }
+
+    await scaffolder_node(state)
+    await emitter.close("se-url-in-prompt")
+
+    user_msgs = [m for m in captured_messages if m["role"] == "user"]
+    assert user_msgs, "scaffolder must send at least one user message to the LLM"
+    user_text = user_msgs[0]["content"]
+    assert target in user_text, (
+        f"target_url {target!r} must appear verbatim in the LLM user prompt; "
+        f"got first 300 chars: {user_text[:300]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. System prompt forbids invented URLs
+# ---------------------------------------------------------------------------
+
+def test_scaffolder_system_prompt_forbids_invented_urls():
+    """SCAFFOLDER_SYSTEM must explicitly instruct the model to use the real URL,
+    not invent placeholder addresses like example.com or /dashboard."""
+    from app.llm.prompts.scaffolder import SCAFFOLDER_SYSTEM
+
+    lowered = SCAFFOLDER_SYSTEM.lower()
+    assert "target_url" in lowered or "target url" in lowered, (
+        "System prompt must reference 'target_url' so the model knows what URL to use"
+    )
+    assert any(phrase in lowered for phrase in ("do not invent", "not invent", "do not guess", "do not assert")), (
+        "System prompt must explicitly forbid inventing URLs for unspecified pages"
+    )

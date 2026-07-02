@@ -31,6 +31,7 @@ async def scaffolder_node(state: QAState) -> dict:
 
     test_plan: list[dict] = state.get("test_plan") or []
     locators: dict = state.get("locators") or {}
+    target_url: str = state.get("target_url") or ""
     critic_feedback: list[dict] | None = state.get("critic_feedback") or None
     existing_script: str = state.get("script") or ""
     reflection_count: int = state.get("reflection_count", 0) + 1
@@ -43,7 +44,7 @@ async def scaffolder_node(state: QAState) -> dict:
             f"Revising script (pass {reflection_count}) addressing "
             f"{len(critic_feedback)} critique(s)…"
             if is_revision else
-            "Generating initial Playwright test script from test plan and locators…"
+            f"Generating initial Playwright test script for {target_url!r}…"
         ),
     )
 
@@ -53,6 +54,7 @@ async def scaffolder_node(state: QAState) -> dict:
             {"role": "user",   "content": build_scaffolder_user(
                 test_plan,
                 locators,
+                target_url=target_url,
                 critic_feedback=critic_feedback if is_revision else None,
                 existing_script=existing_script if is_revision else "",
             )},

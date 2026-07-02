@@ -221,3 +221,52 @@ async def test_ui_mapper_finds_locators(monkeypatch):
     # Verify step IDs are present in the locator dict
     for step in test_plan:
         assert step["step_id"] in locators, f"{step['step_id']} missing from locators"
+
+
+async def test_no_match_intent_returns_zero_confidence(monkeypatch):
+    """A step whose intent has no matching element on the page must return confidence 0.0.
+
+    'verify dashboard loaded' describes an outcome, not an interactive element; the
+    login.html fixture has no dashboard widget.  With the corrected prompt the LLM
+    returns an empty locator — this test asserts the tool propagates 0.0 rather than
+    promoting a forced wrong guess (e.g. #submit) to high confidence.
+    """
+    from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
+    from app.tools.browser import BrowserSession
+
+    async def _intent_aware_mock(
+        messages, model_tier, *,
+        response_format=None, tools=None, max_tokens=2048, run_id=None,
+    ):
+        user = next(
+            (m["content"] for m in messages if m["role"] == "user"), ""
+        ).lower()
+        # Simulate corrected LLM behaviour: verification / dashboard intents → no match.
+        if any(kw in user for kw in ("dashboard", "verify", "confirm", "redirected")):
+            text = '{"css": "", "xpath": "", "confidence": 0.0}'
+        elif "email" in user:
+            text = '{"css": "#email", "xpath": "//input[@id=\'email\']", "confidence": 0.95}'
+        else:
+            text = '{"css": "", "xpath": "", "confidence": 0.0}'
+        return LLMResponse(
+            text=text, input_tokens=50, output_tokens=20,
+            model="mock-fast", cost_usd=0.0,
+        )
+
+    monkeypatch.setattr(llm_mod.llm_client, "complete", _intent_aware_mock)
+
+    with _http_server(str(FIXTURES_DIR)) as server_url:
+        async with BrowserSession() as session:
+            locator = await session.find_locators(
+                f"{server_url}/login.html",
+                "verify dashboard loaded after successful sign in",
+                run_id="test-no-match",
+            )
+
+    assert locator["confidence"] == 0.0, (
+        f"Expected 0.0 for unmatched intent, got {locator['confidence']:.2f} "
+        f"(css={locator['css']!r}) — prompt may still be forcing a nearest-guess."
+    )
+    assert locator["css"] == "", f"Expected empty css, got {locator['css']!r}"
+    assert locator["xpath"] == "", f"Expected empty xpath, got {locator['xpath']!r}"
