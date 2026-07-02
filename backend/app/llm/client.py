@@ -1,4 +1,4 @@
-"""Provider-agnostic LLM client factory.
+"""Provider-agnostic LLM client factory with per-tier routing.
 
 Usage (nodes):
     from app.llm.client import llm_client, LLMResponse
@@ -10,8 +10,10 @@ Usage (nodes):
     )
     text = resp.text
 
-Active provider is read from LLM_PROVIDER env ("anthropic" | "openai").
-Default is "anthropic".  Swap by setting LLM_PROVIDER=openai in .env.
+Provider is resolved per-tier from Settings.effective_provider(tier):
+  - Set REASONING_PROVIDER / FAST_PROVIDER to split tiers across providers.
+  - Falls back to LLM_PROVIDER when per-tier vars are absent.
+  - Model names similarly: REASONING_MODEL / FAST_MODEL override defaults.
 """
 from __future__ import annotations
 
@@ -156,7 +158,7 @@ class AnthropicClient(LLMClient):
         return self._client
 
     def _model(self, tier: ModelTier) -> str:
-        return get_settings().model_for(tier)
+        return get_settings().effective_model(tier)
 
     async def complete(
         self,
@@ -234,7 +236,7 @@ class OpenAIClient(LLMClient):
         return self._client
 
     def _model(self, tier: ModelTier) -> str:
-        return get_settings().openai_model_for(tier)
+        return get_settings().effective_model(tier)
 
     async def complete(
         self,
@@ -292,15 +294,55 @@ class OpenAIClient(LLMClient):
 
 
 # ---------------------------------------------------------------------------
+# Dispatching client — routes each complete() call by tier
+# ---------------------------------------------------------------------------
+
+class DispatchingClient(LLMClient):
+    """Routes complete() to the provider configured for each tier.
+
+    Backends are lazily initialised and cached by provider name so only one
+    Anthropic and one OpenAI client object ever exist per process.
+    """
+
+    def __init__(self) -> None:
+        self._backends: dict[str, LLMClient] = {}
+
+    def _backend(self, tier: ModelTier) -> LLMClient:
+        provider = get_settings().effective_provider(tier)
+        if provider not in self._backends:
+            if provider == "openai":
+                self._backends[provider] = OpenAIClient()
+            else:
+                self._backends[provider] = AnthropicClient()
+        return self._backends[provider]
+
+    async def complete(
+        self,
+        messages: list[Message],
+        model_tier: ModelTier,
+        *,
+        response_format: dict | None = None,
+        tools: list[dict] | None = None,
+        max_tokens: int = 2048,
+        run_id: str | None = None,
+    ) -> LLMResponse:
+        return await self._backend(model_tier).complete(
+            messages,
+            model_tier,
+            response_format=response_format,
+            tools=tools,
+            max_tokens=max_tokens,
+            run_id=run_id,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Factory + module-level singleton
 # ---------------------------------------------------------------------------
 
-def get_llm_client() -> LLMClient:
-    provider = get_settings().llm_provider
-    if provider == "openai":
-        return OpenAIClient()
-    return AnthropicClient()
+def get_llm_client() -> DispatchingClient:
+    return DispatchingClient()
 
 
 # Nodes import this directly.
-llm_client: LLMClient = get_llm_client()
+llm_client: DispatchingClient = get_llm_client()
