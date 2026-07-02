@@ -20,8 +20,16 @@ from app.config import Settings
 # ---------------------------------------------------------------------------
 
 def _settings(**kw) -> Settings:
-    """Create a Settings instance with defaults overridden by *kw*."""
+    """Create a Settings instance isolated from the .env file.
+
+    pydantic-settings loads .env values at a higher priority than model defaults,
+    so a .env file with REASONING_PROVIDER=anthropic would silently override the
+    None default and break tests that exercise the llm_provider fallback path.
+    Passing _env_file=None disables .env loading for these unit tests so they
+    depend only on explicit constructor arguments and model defaults.
+    """
     return Settings(
+        _env_file=None,
         anthropic_api_key="test-anth",
         openai_api_key="test-oai",
         **kw,

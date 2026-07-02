@@ -166,6 +166,76 @@ def test_substitute_url_rewrites_localhost_for_container_execution():
     assert "host.docker.internal" in result
 
 
+def test_rewrite_for_container_rewrites_full_script_text():
+    """_rewrite_for_container applied to a full script rewrites ALL localhost occurrences,
+    not just page.goto() — this covers to_have_url() assertions and any other place
+    the host appears in the script body."""
+    script = (
+        'page.goto("http://localhost:3000/login")\n'
+        'expect(page).to_have_url("http://localhost:3000/login")\n'
+        'page.goto("http://127.0.0.1:3000/dashboard")\n'
+        'expect(page).to_have_url("http://127.0.0.1:3000/dashboard")\n'
+    )
+    result = _rewrite_for_container(script)
+    assert "http://localhost" not in result, "http://localhost URLs must be rewritten"
+    assert "http://127.0.0.1" not in result, "http://127.0.0.1 URLs must be rewritten"
+    assert result.count("host.docker.internal") == 4, (
+        "Every URL occurrence (goto + assertion, both hosts) must be rewritten"
+    )
+
+
+async def test_run_script_rewrites_url_assertions_in_full_script(monkeypatch):
+    """run_script() must rewrite localhost in the WHOLE script (not just goto()),
+    so to_have_url() assertions match the rewritten navigation target.
+
+    We verify by inspecting the script that would be piped into the container:
+    the script passed to the fake Docker process must contain host.docker.internal
+    everywhere localhost appeared, including inside to_have_url().
+    """
+    from app.tools.sandbox import run_script
+
+    received_script: list[str] = []
+
+    # Pretend Docker is available and capture the stdin we'd send.
+    async def _fake_docker_check():
+        return True
+
+    class _FakeProc:
+        returncode = 0
+        async def communicate(self, input=b""):
+            received_script.append(input.decode())
+            return b"1 passed", b""
+
+    async def _fake_exec(*args, stdin=None, stdout=None, stderr=None):
+        return _FakeProc()
+
+    monkeypatch.setattr("app.tools.sandbox._docker_available", _fake_docker_check)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+
+    script_with_assertion = (
+        'from playwright.sync_api import Page, expect\n'
+        'def test_login(page: Page) -> None:\n'
+        '    page.goto("http://localhost:3000/login")\n'
+        '    expect(page).to_have_url("http://localhost:3000/login")\n'
+    )
+
+    await run_script(script_with_assertion, target_url="http://localhost:3000/login")
+
+    assert received_script, "Docker stdin must have been written"
+    piped = received_script[0]
+
+    assert "http://localhost" not in piped, (
+        f"http://localhost URLs must be rewritten in the piped script; got:\n{piped}"
+    )
+    assert "host.docker.internal" in piped, (
+        "host.docker.internal must appear in the piped script"
+    )
+    # The assertion URL must also use host.docker.internal, not localhost.
+    assert 'to_have_url("http://host.docker.internal' in piped, (
+        f"to_have_url() must use host.docker.internal, not localhost; got:\n{piped}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # sandbox.py: is_assertion_failure helper
 # ---------------------------------------------------------------------------

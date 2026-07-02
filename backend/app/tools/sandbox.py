@@ -157,10 +157,16 @@ async def run_script(
         return {"passed": False, "logs": "", "error": msg, "screenshots": [], "exit_code": -1}
 
     # Rewrite localhost/127.0.0.1 → host.docker.internal so the script can
-    # reach host services from inside the container.  The original target_url
-    # in state is never touched.
+    # reach host services from inside the container.  Two passes:
+    #   1. substitute_url() replaces scaffolder placeholder URLs in page.goto() calls.
+    #   2. _rewrite_for_container() rewrites the full script text so assertions like
+    #      expect(page).to_have_url("http://localhost:PORT/…") also use the container
+    #      host — otherwise navigation and assertion use different hostnames and the
+    #      test always fails even when the page loaded correctly.
+    # The original target_url stored in state is never modified.
     container_url = _rewrite_for_container(target_url)
     patched = substitute_url(script, container_url)
+    patched = _rewrite_for_container(patched)
 
     # The bash pipeline:
     #   1. pip install deps (quiet, stderr suppressed — already in image but
