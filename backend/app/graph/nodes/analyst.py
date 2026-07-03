@@ -53,6 +53,27 @@ async def analyst_node(state: QAState) -> dict:
         "Decomposing story into a step-by-step test plan…",
     )
 
+    # Light retrieval: surface similar prior runs before generating fresh content.
+    # Non-fatal — any failure is logged and the node continues normally.
+    try:
+        from app.memory.vector_store import retrieve_similar
+        similar = retrieve_similar(story, n_results=1)
+        if similar:
+            hit = similar[0]
+            await emitter.emit(
+                run_id, agent, 2, "decision",
+                f"Similar prior run found (run_id={hit['run_id']!r}, "
+                f"verdict={hit['verdict']!r}, distance={hit['distance']:.3f}). "
+                "Generating fresh plan — prior results available for context.",
+                data={"cache_hit": True, "prior_run": hit},
+            )
+            logger.info(
+                "Analyst: cache hit for run %s — prior=%s verdict=%s",
+                run_id, hit["run_id"], hit["verdict"],
+            )
+    except Exception as exc:
+        logger.warning("Analyst: vector store check failed — %s", exc)
+
     resp = await llm_client.complete(
         messages=[
             {"role": "system", "content": ANALYST_SYSTEM},
