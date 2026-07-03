@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def _syntax_check(script: str) -> tuple[bool, str]:
+    """Return (ok, error_message).  Uses compile() to catch all Python syntax errors."""
+    try:
+        compile(script, "<generated>", "exec")
+        return True, ""
+    except SyntaxError as exc:
+        return False, f"{exc.msg} (line {exc.lineno}): {exc.text!r}"
+
+
 def _parse_verdict(text: str) -> tuple[bool, list[dict]]:
     """Return (approved, feedback).  Defaults to approved=False on any parse failure."""
     m = _JSON_RE.search(text)
@@ -76,6 +85,25 @@ async def critic_node(state: QAState) -> dict:
             ],
         }
 
+    # Hard syntax gate: reject before calling the LLM if the script doesn't parse.
+    syntax_ok, syntax_err = _syntax_check(script)
+    if not syntax_ok:
+        logger.warning(
+            "Critic: syntax gate rejected script at pass %d — %s", reflection_count, syntax_err
+        )
+        feedback_item = {
+            "issue": f"Python syntax error: {syntax_err}",
+            "severity": "high",
+            "suggestion": "Fix the syntax error before re-submitting. "
+                          "Ensure no JS-style regex literals (/.+/) or other invalid Python.",
+        }
+        await emitter.emit(
+            run_id, agent, 3, "decision",
+            f"[HIGH] Syntax error detected — script rejected without LLM review: {syntax_err}",
+            data=feedback_item,
+        )
+        return {"critic_approved": False, "critic_feedback": [feedback_item]}
+
     resp = await llm_client.complete(
         messages=[
             {"role": "system", "content": CRITIC_SYSTEM},
@@ -87,6 +115,16 @@ async def critic_node(state: QAState) -> dict:
     )
 
     approved, feedback = _parse_verdict(resp.text)
+
+    # Safety override: never approve when any HIGH severity issue is present,
+    # regardless of what the LLM returned in the "approved" field.
+    if approved and any(item.get("severity") == "high" for item in feedback):
+        logger.warning(
+            "Critic: LLM returned approved=true with HIGH issues at pass %d — "
+            "overriding to unapproved. run=%s",
+            reflection_count, run_id,
+        )
+        approved = False
 
     # Emit each critique item as its own decision event so the loop is visible.
     for item in feedback:
