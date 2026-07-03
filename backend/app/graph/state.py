@@ -32,6 +32,10 @@ class QAState(TypedDict, total=False):
     hitl_request: Optional[dict]    # {reason, question, context} when paused
     hitl_response: Optional[str]    # clarification injected by the human on resume
 
+    # --- Phase 1.5: test case design ---
+    scenarios: list[dict]          # [{scenario_id, title, type, preconditions, description, expected_outcome}]
+    review_scenarios: bool         # when True, pause for HITL after scenario generation
+
     # --- Phase 2: scenario generation & UI mapping ---
     test_plan: list[dict]           # [{step_id, intent, action, expected}, ...]
     locators: dict                  # {step_id: {css, xpath, confidence}}

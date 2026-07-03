@@ -48,6 +48,7 @@ app.add_middleware(
 class RunRequest(BaseModel):
     raw_input: str
     target_url: str = ""
+    review_scenarios: bool = False
 
 
 class RunResponse(BaseModel):
@@ -58,7 +59,12 @@ class ResumeRequest(BaseModel):
     response: str
 
 
-async def _execute_run(run_id: str, raw_input: str, target_url: str) -> None:
+async def _execute_run(
+    run_id: str,
+    raw_input: str,
+    target_url: str,
+    review_scenarios: bool = False,
+) -> None:
     """Drive the graph and manage the event stream lifecycle.
 
     If the graph is interrupted for HITL the stream stays open — the resume
@@ -69,6 +75,7 @@ async def _execute_run(run_id: str, raw_input: str, target_url: str) -> None:
         "run_id": run_id,
         "raw_input": raw_input,
         "target_url": target_url,
+        "review_scenarios": review_scenarios,
         "status": "running",
     }
     try:
@@ -107,7 +114,7 @@ async def _execute_resume(run_id: str, hitl_response: str) -> None:
 @app.post("/runs", response_model=RunResponse)
 async def start_run(req: RunRequest) -> RunResponse:
     run_id = uuid.uuid4().hex
-    asyncio.create_task(_execute_run(run_id, req.raw_input, req.target_url))
+    asyncio.create_task(_execute_run(run_id, req.raw_input, req.target_url, req.review_scenarios))
     return RunResponse(run_id=run_id)
 
 

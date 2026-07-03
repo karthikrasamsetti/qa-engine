@@ -27,6 +27,7 @@ from app.graph.nodes.invest import invest_node
 from app.graph.nodes.scaffolder import scaffolder_node
 from app.graph.nodes.self_heal import self_heal_node
 from app.graph.nodes.synthesis import synthesis_node
+from app.graph.nodes.test_case_designer import test_case_designer_node
 from app.graph.nodes.ui_mapper import ui_mapper_node
 from app.graph.state import QAState
 
@@ -42,7 +43,7 @@ def route_after_invest(state: QAState) -> str:
     verdict = state.get("invest_verdict", {})
     if not verdict.get("passed", False):
         return "hitl_pause"
-    return "analyst"
+    return "test_case_designer"
 
 
 def route_after_critic(state: QAState) -> str:
@@ -81,30 +82,34 @@ def build_graph():
     g = StateGraph(QAState)
 
     # --- nodes ---
-    g.add_node("context",   context_node)
-    g.add_node("guardrail", guardrail_node)
-    g.add_node("invest",    invest_node)
-    g.add_node("hitl_pause", _hitl_pause)
-    g.add_node("analyst",   analyst_node)
-    g.add_node("ui_mapper", ui_mapper_node)
-    g.add_node("scaffolder", scaffolder_node)
-    g.add_node("critic",    critic_node)
-    g.add_node("execution", execution_node)
-    g.add_node("self_heal", self_heal_node)
-    g.add_node("synthesis", synthesis_node)
+    g.add_node("context",           context_node)
+    g.add_node("guardrail",         guardrail_node)
+    g.add_node("invest",            invest_node)
+    g.add_node("hitl_pause",        _hitl_pause)
+    g.add_node("test_case_designer", test_case_designer_node)
+    g.add_node("analyst",           analyst_node)
+    g.add_node("ui_mapper",         ui_mapper_node)
+    g.add_node("scaffolder",        scaffolder_node)
+    g.add_node("critic",            critic_node)
+    g.add_node("execution",         execution_node)
+    g.add_node("self_heal",         self_heal_node)
+    g.add_node("synthesis",         synthesis_node)
 
     # Phase 1 linear chain
     g.add_edge(START, "context")
     g.add_edge("context", "guardrail")
     g.add_edge("guardrail", "invest")
 
-    # INVEST -> HITL (safety net) or analyst
+    # INVEST -> HITL (safety net) or Test Case Designer
     g.add_conditional_edges(
         "invest", route_after_invest,
-        {"hitl_pause": "hitl_pause", "analyst": "analyst"},
+        {"hitl_pause": "hitl_pause", "test_case_designer": "test_case_designer"},
     )
-    # Stage B: fallback path continues forward (Stage A had hitl_pause -> END)
-    g.add_edge("hitl_pause", "analyst")
+    # hitl_pause safety net continues to Test Case Designer then onwards
+    g.add_edge("hitl_pause", "test_case_designer")
+
+    # Phase 1.5 -> Phase 2
+    g.add_edge("test_case_designer", "analyst")
 
     # Phase 2
     g.add_edge("analyst",   "ui_mapper")

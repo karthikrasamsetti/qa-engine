@@ -58,6 +58,7 @@ NODE_TOOL_REGISTRY: dict[str, frozenset[str]] = {
     "context agent":            frozenset({"jira:fetch"}),
     "policy enforcer":          frozenset(),
     "invest reviewer":          frozenset({"llm:reasoning", "hitl:interrupt"}),
+    "test case designer":       frozenset({"llm:reasoning", "hitl:interrupt"}),
     "requirements analyst":     frozenset({"llm:reasoning", "vector_store:read"}),
     "ui mapper":                frozenset({"llm:fast", "browser:find"}),
     "scaffolder":               frozenset({"llm:reasoning"}),
