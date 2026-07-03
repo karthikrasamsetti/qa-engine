@@ -26,9 +26,14 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from app.graph.builder import graph
+from app.observability.audit import audit_log
 from app.streaming.events import emitter
 
 logging.basicConfig(level=logging.INFO)
+
+# Wire the audit log into the emitter so every trajectory event is persisted
+# to data/audit/<run_id>.jsonl without any changes to individual nodes.
+emitter.set_audit(audit_log.write_event)
 
 app = FastAPI(title="Intelligent QA Engine")
 

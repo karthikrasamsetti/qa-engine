@@ -43,10 +43,19 @@ class EventEmitter:
 
     A graph run pushes events via `emit`; the SSE endpoint drains the matching
     queue via `subscribe`. A sentinel `None` closes the stream.
+
+    Call ``set_audit(hook)`` with a callable to enable the structured audit log.
+    The hook receives each TrajectoryEvent synchronously after it is enqueued.
+    Pass ``None`` to disable.
     """
 
     def __init__(self) -> None:
         self._queues: dict[str, asyncio.Queue[Optional[TrajectoryEvent]]] = {}
+        self._audit_hook = None
+
+    def set_audit(self, hook) -> None:
+        """Register (or clear) the audit hook called for every emitted event."""
+        self._audit_hook = hook
 
     def _queue_for(self, run_id: str) -> asyncio.Queue[Optional[TrajectoryEvent]]:
         if run_id not in self._queues:
@@ -72,6 +81,11 @@ class EventEmitter:
             data=data or {},
         )
         await self._queue_for(run_id).put(event)
+        if self._audit_hook is not None:
+            try:
+                self._audit_hook(event)
+            except Exception:
+                pass  # audit must never break a live run
 
     async def close(self, run_id: str) -> None:
         """Signal end-of-stream for a run."""
