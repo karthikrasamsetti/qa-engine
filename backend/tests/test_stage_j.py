@@ -44,3 +44,29 @@ def test_app_map_round_trips_to_json(tmp_path):
 def test_load_map_returns_none_for_missing(tmp_path):
     from app.tools.explorer import load_map
     assert load_map("no-such-id", "example_com", app_maps_dir=tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: flow inference prompt
+# ---------------------------------------------------------------------------
+
+def test_build_explorer_flow_user_includes_urls_titles_and_form_fields():
+    from app.llm.prompts.explorer import build_explorer_flow_user
+    pages = [
+        {
+            "url": "https://example.com/login",
+            "title": "Sign In",
+            "forms": [{"action": "/auth", "method": "post", "fields": ["email", "password"]}],
+        },
+        {
+            "url": "https://example.com/dashboard",
+            "title": "Dashboard",
+            "forms": [],
+        },
+    ]
+    prompt = build_explorer_flow_user(pages)
+    assert "https://example.com/login" in prompt
+    assert "Sign In" in prompt
+    assert "email" in prompt
+    assert "password" in prompt
+    assert "Dashboard" in prompt
