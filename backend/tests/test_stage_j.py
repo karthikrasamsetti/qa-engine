@@ -352,3 +352,86 @@ async def test_partial_map_persisted_on_failure(tmp_path, monkeypatch):
     assert len(raw["pages"]) == 2, (
         f"Expected 2 pages before crash, got {len(raw['pages'])}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 7: endpoint smoke tests (sync — avoids async/TestClient loop conflicts)
+# ---------------------------------------------------------------------------
+
+def test_post_explore_returns_explore_id(monkeypatch):
+    """POST /explore returns {explore_id} without running Playwright."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.tools import explorer as explorer_mod
+
+    async def _noop_run(self):
+        return explorer_mod.AppMap(
+            explore_id=self._explore_id,
+            target_url=self._target_url,
+            target_origin=self._target_origin,
+            target_origin_slug=self._slug,
+            status="complete",
+        )
+    monkeypatch.setattr(explorer_mod.ExploreAgent, "run", _noop_run)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post("/explore", json={"target_url": "https://example.com"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "explore_id" in body and len(body["explore_id"]) > 0
+
+
+def test_get_explore_returns_404_for_unknown():
+    """GET /explore/{id} returns 404 when no map exists."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    with TestClient(app) as client:
+        resp = client.get("/explore/definitely-does-not-exist-xyz")
+    assert resp.status_code == 404
+
+
+def test_explore_runs_forwards_flows(tmp_path, monkeypatch):
+    """POST /explore/{id}/runs spawns a run_id per requested flow_name."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.tools.explorer import AppMap, FlowSnapshot, save_map
+    import app.tools.explorer as explorer_mod
+    import app.main as main_mod
+
+    slug = "example_com"
+    explore_id = "fwd-test-001"
+    app_map = AppMap(
+        explore_id=explore_id,
+        target_url="https://example.com",
+        target_origin="https://example.com",
+        target_origin_slug=slug,
+        status="complete",
+        flows=[
+            FlowSnapshot(
+                name="login flow",
+                pages_involved=["https://example.com/login"],
+                description="User logs in via the login page.",
+            )
+        ],
+    )
+    monkeypatch.setattr(explorer_mod, "_DEFAULT_APP_MAPS_DIR", tmp_path)
+    save_map(app_map, tmp_path)
+
+    spawned: list[dict] = []
+
+    async def _fake_execute_run(run_id, raw_input, target_url, review_scenarios=False):
+        spawned.append({"run_id": run_id, "raw_input": raw_input})
+
+    monkeypatch.setattr(main_mod, "_execute_run", _fake_execute_run)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/explore/{explore_id}/runs",
+            json={"flow_names": ["login flow"]},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["runs"]) == 1
+    assert body["runs"][0]["flow_name"] == "login flow"
+    assert "run_id" in body["runs"][0]

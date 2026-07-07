@@ -18,6 +18,7 @@ if sys.platform == "win32":
 
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +58,39 @@ class RunResponse(BaseModel):
 
 class ResumeRequest(BaseModel):
     response: str
+
+
+class CredentialsInput(BaseModel):
+    username: str
+    password: str
+    username_selector: str = ""
+    password_selector: str = ""
+
+
+class ExploreRequest(BaseModel):
+    target_url: str
+    credentials: CredentialsInput | None = None
+    depth_cap: int = 2
+    page_cap: int = 10
+
+
+class ExploreResponse(BaseModel):
+    explore_id: str
+
+
+class ExploreRunRequest(BaseModel):
+    # target_url is intentionally absent: always taken from the stored AppMap
+    # to avoid ambiguity about which URL to test.
+    flow_names: list[str]
+
+
+class ExploreRunItem(BaseModel):
+    flow_name: str
+    run_id: str
+
+
+class ExploreRunResponse(BaseModel):
+    runs: list[ExploreRunItem]
 
 
 async def _execute_run(
@@ -111,6 +145,29 @@ async def _execute_resume(run_id: str, hitl_response: str) -> None:
     await emitter.close(run_id)
 
 
+async def _execute_explore(
+    explore_id: str,
+    target_url: str,
+    credentials,   # ExploreCredentials | None
+    depth_cap: int,
+    page_cap: int,
+) -> None:
+    """Drive ExploreAgent in a background task."""
+    from app.tools.explorer import ExploreAgent
+    agent = ExploreAgent(
+        target_url=target_url,
+        explore_id=explore_id,
+        credentials=credentials,
+        depth_cap=depth_cap,
+        page_cap=page_cap,
+    )
+    try:
+        await agent.run()
+    except Exception:
+        pass  # run() persists the failed map and emits an error event
+    await emitter.close(explore_id)
+
+
 @app.post("/runs", response_model=RunResponse)
 async def start_run(req: RunRequest) -> RunResponse:
     run_id = uuid.uuid4().hex
@@ -149,3 +206,62 @@ async def get_run_cost(run_id: str) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/explore", response_model=ExploreResponse)
+async def start_explore(req: ExploreRequest) -> ExploreResponse:
+    from app.tools.explorer import ExploreCredentials
+    explore_id = uuid.uuid4().hex
+    creds = None
+    if req.credentials is not None:
+        creds = ExploreCredentials(
+            username=req.credentials.username,
+            password=req.credentials.password,
+            username_selector=req.credentials.username_selector,
+            password_selector=req.credentials.password_selector,
+        )
+    asyncio.create_task(
+        _execute_explore(explore_id, req.target_url, creds, req.depth_cap, req.page_cap)
+    )
+    return ExploreResponse(explore_id=explore_id)
+
+
+@app.get("/explore/{explore_id}/stream")
+async def stream_explore(explore_id: str) -> EventSourceResponse:
+    async def event_generator():
+        async for event in emitter.subscribe(explore_id):
+            yield {"event": event.type, "data": event.model_dump_json()}
+    return EventSourceResponse(
+        event_generator(),
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/explore/{explore_id}")
+async def get_explore(explore_id: str):
+    from fastapi import HTTPException
+    from app.tools.explorer import AppMap, _DEFAULT_APP_MAPS_DIR
+    matches = list(Path(_DEFAULT_APP_MAPS_DIR).rglob(f"{explore_id}.json"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="AppMap not found")
+    return AppMap.model_validate_json(matches[0].read_text(encoding="utf-8"))
+
+
+@app.post("/explore/{explore_id}/runs", response_model=ExploreRunResponse)
+async def forward_explore_flows(explore_id: str, req: ExploreRunRequest) -> ExploreRunResponse:
+    from fastapi import HTTPException
+    from app.tools.explorer import AppMap, _DEFAULT_APP_MAPS_DIR
+    matches = list(Path(_DEFAULT_APP_MAPS_DIR).rglob(f"{explore_id}.json"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="AppMap not found")
+    app_map = AppMap.model_validate_json(matches[0].read_text(encoding="utf-8"))
+    flow_name_lower = {n.lower() for n in req.flow_names}
+    runs: list[ExploreRunItem] = []
+    for flow in app_map.flows:
+        if flow.name.lower() not in flow_name_lower:
+            continue
+        story = f"Test the {flow.name}: {flow.description}"
+        run_id = uuid.uuid4().hex
+        asyncio.create_task(_execute_run(run_id, story, app_map.target_url))
+        runs.append(ExploreRunItem(flow_name=flow.name, run_id=run_id))
+    return ExploreRunResponse(runs=runs)
