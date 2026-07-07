@@ -165,3 +165,64 @@ async def test_caps_are_enforced(tmp_path, monkeypatch):
         assert f"/p/{i}" not in visited_paths, (
             f"depth-2 page /p/{i} must not be visited"
         )
+
+
+# ---------------------------------------------------------------------------
+# T1 — Explorer maps multi-page fixture, discovers login flow
+# ---------------------------------------------------------------------------
+
+async def test_explorer_discovers_login_flow(tmp_path, monkeypatch):
+    """Visits / and /login; LLM mock returns 'login flow'; map is complete."""
+    from app.tools.explorer import ExploreAgent
+    from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
+
+    _FLOW_JSON = json.dumps([{
+        "name": "login flow",
+        "pages_involved": [],
+        "description": "User logs in via the login page.",
+    }])
+
+    async def _llm_stub(messages, model_tier, **kw):
+        return LLMResponse(
+            text=_FLOW_JSON, input_tokens=10, output_tokens=50,
+            model="mock", cost_usd=0.0,
+        )
+    monkeypatch.setattr(llm_mod.llm_client, "complete", _llm_stub)
+
+    pages = {
+        "/": (
+            "<html><head><title>Home</title></head>"
+            "<body><a href='/login'>Login</a></body></html>"
+        ),
+        "/login": (
+            "<html><head><title>Sign In</title></head><body>"
+            "<form method='post' action='/auth'>"
+            "<input type='email' name='email' placeholder='Email'/>"
+            "<input type='password' name='password'/>"
+            "<button type='submit'>Login</button>"
+            "</form></body></html>"
+        ),
+    }
+    base_url, server = _start_fixture_server(pages)
+
+    agent = ExploreAgent(
+        target_url=base_url,
+        explore_id="t1-login",
+        depth_cap=2,
+        page_cap=10,
+        app_maps_dir=tmp_path,
+    )
+    app_map = await agent.run()
+    server.shutdown()
+
+    visited_urls = {p.url.rstrip("/") for p in app_map.pages}
+    assert base_url.rstrip("/") in visited_urls, (
+        f"Home page missing; visited: {visited_urls}"
+    )
+    assert base_url.rstrip("/") + "/login" in visited_urls, (
+        f"/login missing; visited: {visited_urls}"
+    )
+    assert app_map.status == "complete", f"Expected complete, got {app_map.status}"
+    assert len(app_map.flows) == 1, f"Expected 1 flow, got {app_map.flows}"
+    assert app_map.flows[0].name == "login flow"
