@@ -226,3 +226,129 @@ async def test_explorer_discovers_login_flow(tmp_path, monkeypatch):
     assert app_map.status == "complete", f"Expected complete, got {app_map.status}"
     assert len(app_map.flows) == 1, f"Expected 1 flow, got {app_map.flows}"
     assert app_map.flows[0].name == "login flow"
+
+
+# ---------------------------------------------------------------------------
+# T3 — credentials never appear in events or persisted map
+# ---------------------------------------------------------------------------
+
+async def test_credentials_never_in_events_or_map(tmp_path, monkeypatch):
+    """'alice' and 's3cr3t' must be absent from all events and the JSON file."""
+    from app.tools.explorer import ExploreAgent, ExploreCredentials
+    from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
+    from app.streaming.events import emitter
+
+    async def _llm_stub(messages, model_tier, **kw):
+        return LLMResponse(
+            text="[]", input_tokens=1, output_tokens=1, model="mock", cost_usd=0.0
+        )
+    monkeypatch.setattr(llm_mod.llm_client, "complete", _llm_stub)
+
+    pages = {
+        "/": (
+            "<html><head><title>Login</title></head><body>"
+            "<form method='post' action='/auth'>"
+            "<input type='email' name='email'/>"
+            "<input type='password' name='password'/>"
+            "<button type='submit'>Login</button>"
+            "</form></body></html>"
+        ),
+    }
+    base_url, server = _start_fixture_server(pages)
+    explore_id = "t3-creds"
+
+    agent = ExploreAgent(
+        target_url=base_url,
+        explore_id=explore_id,
+        credentials=ExploreCredentials(username="alice", password="s3cr3t"),
+        depth_cap=1,
+        page_cap=3,
+        app_maps_dir=tmp_path,
+    )
+    await agent.run()
+    server.shutdown()
+
+    # Drain all events for this run from the asyncio queue
+    collected = []
+    q = emitter._queues.get(explore_id)
+    if q is not None:
+        while not q.empty():
+            try:
+                item = q.get_nowait()
+                if item is not None:
+                    collected.append(item)
+            except asyncio.QueueEmpty:
+                break
+
+    SECRET_TERMS = ("alice", "s3cr3t")
+    for ev in collected:
+        for term in SECRET_TERMS:
+            assert term not in ev.message, (
+                f"{term!r} found in event message: {ev.message!r}"
+            )
+            data_str = json.dumps(ev.data)
+            assert term not in data_str, (
+                f"{term!r} found in event data: {data_str!r}"
+            )
+
+    # Check the persisted JSON file
+    files = list(tmp_path.rglob(f"{explore_id}.json"))
+    assert files, "AppMap file not found on disk"
+    content = files[0].read_text(encoding="utf-8")
+    for term in SECRET_TERMS:
+        assert term not in content, (
+            f"{term!r} found in persisted AppMap JSON"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T4 — partial map persisted on failure
+# ---------------------------------------------------------------------------
+
+async def test_partial_map_persisted_on_failure(tmp_path, monkeypatch):
+    """When _crawl raises after 2 pages, map has status=failed, error, and 2 pages."""
+    from app.tools.explorer import ExploreAgent, PageSnapshot, save_map
+    from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
+
+    async def _llm_stub(messages, model_tier, **kw):
+        return LLMResponse(
+            text="[]", input_tokens=1, output_tokens=1, model="mock", cost_usd=0.0
+        )
+    monkeypatch.setattr(llm_mod.llm_client, "complete", _llm_stub)
+
+    # Patch _crawl to save 2 fake pages then raise — tests run() error handling
+    async def _patched_crawl(self, page, app_map, seed_urls):
+        for i in range(2):
+            snap = PageSnapshot(url=f"{self._target_url}/p/{i}", title=f"Page {i}")
+            app_map.pages.append(snap)
+            save_map(app_map, self._app_maps_dir)
+        raise RuntimeError("Simulated navigation failure on page 3")
+
+    monkeypatch.setattr(ExploreAgent, "_crawl", _patched_crawl)
+
+    pages = {"/": "<html><head><title>Home</title></head><body></body></html>"}
+    base_url, server = _start_fixture_server(pages)
+    explore_id = "t4-partial"
+
+    agent = ExploreAgent(
+        target_url=base_url,
+        explore_id=explore_id,
+        depth_cap=2,
+        page_cap=10,
+        app_maps_dir=tmp_path,
+    )
+    with pytest.raises(RuntimeError, match="Simulated navigation failure"):
+        await agent.run()
+    server.shutdown()
+
+    files = list(tmp_path.rglob(f"{explore_id}.json"))
+    assert files, "Partial AppMap was not persisted to disk"
+    raw = json.loads(files[0].read_text(encoding="utf-8"))
+
+    assert raw["status"] == "failed", f"Expected status=failed, got {raw['status']}"
+    assert raw["error"], "Expected non-empty error string"
+    assert len(raw["pages"]) == 2, (
+        f"Expected 2 pages before crash, got {len(raw['pages'])}"
+    )
