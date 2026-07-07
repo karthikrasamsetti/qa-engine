@@ -68,6 +68,7 @@ NODE_TOOL_REGISTRY: dict[str, frozenset[str]] = {
     "synthesis agent":          frozenset({"llm:reasoning", "vector_store:write"}),
     # The LLM client emits cost events under the "System" agent.
     "system":                   frozenset({"llm:reasoning", "llm:fast"}),
+    "explorer agent":           frozenset({"browser:navigate", "llm:reasoning"}),
 }
 
 

@@ -70,3 +70,15 @@ def test_build_explorer_flow_user_includes_urls_titles_and_form_fields():
     assert "email" in prompt
     assert "password" in prompt
     assert "Dashboard" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Task 3: audit registry
+# ---------------------------------------------------------------------------
+
+def test_explorer_agent_in_node_tool_registry():
+    from app.observability.audit import NODE_TOOL_REGISTRY
+    assert "explorer agent" in NODE_TOOL_REGISTRY
+    allowed = NODE_TOOL_REGISTRY["explorer agent"]
+    assert "browser:navigate" in allowed
+    assert "llm:reasoning" in allowed
