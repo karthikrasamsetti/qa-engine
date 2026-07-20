@@ -337,6 +337,13 @@ class ExploreAgent:
                 logger.warning("Navigation failed for %s: %s", url, exc)
                 continue
 
+            # SPA timing fix: wait for render before extracting elements.
+            # Best-effort — some apps have long-polling so we cap at 5s.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5_000)
+            except (PWTimeout, Exception):
+                pass
+
             # Use the actual landed URL (resolves redirects)
             landed_url = page.url
             title = await page.title()
@@ -378,6 +385,10 @@ class ExploreAgent:
     async def _login(self, page) -> str | None:
         """Fill and submit the login form.
 
+        Waits for the login form to appear before probing selectors so that
+        SPAs that render forms asynchronously (after domcontentloaded) are
+        handled correctly.
+
         Credential values are accessed inline and never placed in any dict,
         event data field, or log statement.
         """
@@ -394,28 +405,51 @@ class ExploreAgent:
         try:
             await page.goto(self._target_url, wait_until="domcontentloaded", timeout=15_000)
 
+            # SPA timing fix: wait for any auth field before probing selectors.
+            # JS-rendered forms appear after domcontentloaded; this blocks until
+            # at least one auth-related input is in the DOM (or 10s elapses).
+            try:
+                await page.wait_for_selector(
+                    "input[name='username'], input[name*='user' i], "
+                    "input[type='email'], input[name*='email' i], input[type='password']",
+                    timeout=10_000,
+                )
+            except PWTimeout:
+                pass  # Handled by the "field not found" checks below
+
+            tried: list[str] = []
             u_sel = self._credentials.username_selector
             if not u_sel:
                 for candidate in (
-                    "input[type='email']", "input[name='email']",
-                    "input[name='username']", "input[type='text']",
+                    "input[name='username']",
+                    "input[name*='user' i]",
+                    "input[type='email']",
+                    "input[name*='email' i]",
+                    "form:has(input[type='password']) input[type='text']",
                 ):
-                    if await page.locator(candidate).count() > 0:
-                        u_sel = candidate
+                    tried.append(candidate)
+                    if await page.locator(f"{candidate}:visible").count() > 0:
+                        u_sel = f"{candidate}:visible"
                         break
 
-            p_sel = self._credentials.password_selector or "input[type='password']"
+            p_sel = self._credentials.password_selector or "input[type='password']:visible"
 
             if not u_sel or await page.locator(u_sel).count() == 0:
-                logger.warning("Login: username field not found")
-                await emitter.emit(self._explore_id, self.AGENT, self.PHASE,
-                                   "error", "Login failed: username field not found")
+                logger.warning("Login: username field not found (tried: %s)", tried)
+                await emitter.emit(
+                    self._explore_id, self.AGENT, self.PHASE,
+                    "error", "Login failed: username field not found",
+                    data={"tried_selectors": tried},
+                )
                 return None
 
             if await page.locator(p_sel).count() == 0:
                 logger.warning("Login: password field not found")
-                await emitter.emit(self._explore_id, self.AGENT, self.PHASE,
-                                   "error", "Login failed: password field not found")
+                await emitter.emit(
+                    self._explore_id, self.AGENT, self.PHASE,
+                    "error", "Login failed: password field not found",
+                    data={"tried_selectors": [p_sel]},
+                )
                 return None
 
             # Fill — values read inline, never stored in a loggable variable

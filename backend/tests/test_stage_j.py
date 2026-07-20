@@ -391,6 +391,80 @@ def test_get_explore_returns_404_for_unknown():
     assert resp.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# T5 — SPA: login form injected 600ms after DOM load (simulates async render)
+# ---------------------------------------------------------------------------
+
+async def test_login_succeeds_on_spa_delayed_form(tmp_path, monkeypatch):
+    """Login form injected 600ms post-DOMContentLoaded; wait_for_selector must catch it."""
+    from app.tools.explorer import ExploreAgent, ExploreCredentials
+    from app.llm import client as llm_mod
+    from app.llm.client import LLMResponse
+    from app.streaming.events import emitter
+
+    async def _llm_stub(messages, model_tier, **kw):
+        return LLMResponse(text="[]", input_tokens=1, output_tokens=1, model="mock", cost_usd=0.0)
+    monkeypatch.setattr(llm_mod.llm_client, "complete", _llm_stub)
+
+    # Form created via JS 600ms after DOMContentLoaded (simulates Vue/React SPA)
+    SPA_PAGE = """<html><head><title>SPA Login</title></head><body>
+<div id='app'>Loading...</div>
+<script>
+setTimeout(function() {
+  var f = document.createElement('form');
+  f.method = 'post'; f.action = '/auth';
+  var u = document.createElement('input');
+  u.type = 'text'; u.name = 'username';
+  var p = document.createElement('input');
+  p.type = 'password'; p.name = 'password';
+  var b = document.createElement('button');
+  b.type = 'submit'; b.textContent = 'Login';
+  f.appendChild(u); f.appendChild(p); f.appendChild(b);
+  document.getElementById('app').appendChild(f);
+}, 600);
+</script>
+</body></html>"""
+
+    pages = {"/": SPA_PAGE}
+    base_url, server = _start_fixture_server(pages)
+    explore_id = "t5-spa-login"
+
+    agent = ExploreAgent(
+        target_url=base_url,
+        explore_id=explore_id,
+        credentials=ExploreCredentials(username="testuser", password="testpass"),
+        depth_cap=1,
+        page_cap=2,
+        app_maps_dir=tmp_path,
+    )
+    await agent.run()
+    server.shutdown()
+
+    # Drain event queue (same pattern as T3)
+    collected: list = []
+    q = emitter._queues.get(explore_id)
+    if q is not None:
+        while not q.empty():
+            try:
+                item = q.get_nowait()
+                if item is not None:
+                    collected.append(item)
+            except asyncio.QueueEmpty:
+                break
+
+    messages = [ev.message for ev in collected]
+    assert not any("username field not found" in m for m in messages), (
+        f"SPA timing: login failed with 'username field not found'. Events: {messages}"
+    )
+    assert any("Login complete" in m for m in messages), (
+        f"Login did not complete (no 'Login complete' event). Events: {messages}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 7: endpoint smoke tests (sync — avoids async/TestClient loop conflicts)
+# ---------------------------------------------------------------------------
+
 def test_explore_runs_forwards_flows(tmp_path, monkeypatch):
     """POST /explore/{id}/runs spawns a run_id per requested flow_name."""
     from fastapi.testclient import TestClient
